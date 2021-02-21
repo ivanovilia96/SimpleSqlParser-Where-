@@ -7,99 +7,197 @@ import (
 )
 
 var (
-	incorrectQueryError                                             = errors.New("your query is incorrect")
-	thereIsAnKeywordsFromAnotherQueryPart                           = errors.New("your query has an keyword like LIMIT or ORDER BY, which can not be in this part of query")
-	incorrectStartOfQuery                                           = errors.New("your query can not start or end with AND or OR clause ")
-	comparisonAndLogicalOperationsWhichCanBeInWhereClauseEasyStruct = []string{"=", ">", "<", ">=", "<=", "<>", "!=", "BETWEEN"}
-	comparisonAndLogicalOperationsWhichCanBeInWhereClause           = []string{"=", ">", "<", ">=", "<=", "<>", "!=", "AND", "OR", "IN", "BETWEEN", "LIKE", "NOT"}
-	syntaxError                                                     = errors.New("syntax error")
+	incorrectQueryError                                                           = errors.New("your query is incorrect")
+	thereIsAnKeywordsFromAnotherQueryPart                                         = errors.New("your query has an keyword like LIMIT or ORDER BY, which can not be in this part of query, or IN statement which dont support now")
+	comparisonAndLogicalOperationsWhichCanBeInWhereClauseRightValueLeftColumnName = []string{"=", ">", "<", ">=", "<=", "<>", "!=", "BETWEEN", "LIKE"}
+	comparisonAndLogicalOperationsWhichCanBeInWhereClauseRightColumnNameLeftValue = []string{"AND", "OR"}
+	comparisonAndLogicalOperationsWhichCanBeInWhereClause                         = []string{"=", ">", "<", ">=", "<=", "<>", "!=", "AND", "OR", "IN", "BETWEEN", "LIKE"}
+	syntaxErrorQuotes                                                             = errors.New("maybe you forgot add \" ' \" to start or end of your word")
 )
 
+// IN, LIKE keywords don`t support now
+
 type Parse struct {
-	sqlWhereQuery string
-	sqlParts      []string
+	sqlWhereQuery      string
+	tokensListWithInfo []StatisticElement
+	columnInfo         map[string]string
+	// этот Where это из задания в случае успеха разбора и проверки входных условий - формировать WHERE условия для qb squirrel.SelectBuilder вида qb =
+	//qb.Where(squirrel.Eq{left: val}) то есть left - columnName val - val
+	Where map[string]string
 }
 
+type StatisticElement struct {
+	tokenType string
+	dataType  string
+	value     string
+}
+
+// разбирает на токены исходную строку + первичная проверка на точно не имеющие к части запроса where ключевые слова
 func (v *Parse) ParseQueryOnTokens() error {
 	splittedQuery := strings.Split(strings.TrimSpace(strings.ToUpper(v.sqlWhereQuery)), " ")
 	for _, value := range splittedQuery {
 		if value == "LIMIT" || value == "ORDER" || value == ",LIMIT" || value == ",ORDER" || value == "LIMIT," || value == "ORDER," {
 			return thereIsAnKeywordsFromAnotherQueryPart
 		} else if len(value) != 0 {
-			v.sqlParts = append(v.sqlParts, value)
+			v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value})
 		}
 	}
 
-	if len(v.sqlParts) < 3 {
+	if len(v.tokensListWithInfo) < 3 {
 		return incorrectQueryError
 	}
 
-	for _, v := range v.sqlParts {
-		println(v, " value")
-	}
 	return nil
 }
 
-func (v *Parse) CheckCorrectSpelling() {
-	if _, isThere := Find(comparisonAndLogicalOperationsWhichCanBeInWhereClause, v.sqlParts[0]); isThere {
-		panic(incorrectStartOfQuery.Error())
+// функция определяет тип данных элемента и тип токена (r\l value, specWord), возвращает выявленную информацию о токенах
+func splitTokensOnTypes(tokens []StatisticElement) (error, []StatisticElement) {
+	var sortedTokens []StatisticElement
+	for _, value := range tokens {
+		tokenValue := value.value
+		// определяем к какому типу относится токен (л-валуе или р-валуе или ключевое слово какое-то)
+		//check for int r-value
+		if _, err := strconv.Atoi(tokenValue); err == nil {
+			sortedTokens = append(sortedTokens, StatisticElement{"rValue", "int", tokenValue})
+			//check for string r-value\l-value and non-special word
+		} else if _, isThere := Find(comparisonAndLogicalOperationsWhichCanBeInWhereClause, tokenValue); !isThere {
+			// проверка на кавычки если они есть с 1 стороны. то должны быть и с другой, иначе синтаксическая ошибка
+			if tokenValue[0] == '\'' || tokenValue[len(tokenValue)-1] == '\'' {
+				if tokenValue[0] != '\'' || tokenValue[len(tokenValue)-1] != '\'' {
+					panic(syntaxErrorQuotes.Error())
+				}
+			}
+			// если есть ковычки то это r-value
+			if tokenValue[0] == '\'' && tokenValue[len(tokenValue)-1] == '\'' {
+				sortedTokens = append(sortedTokens, StatisticElement{"rValue", "string", tokenValue})
+			} else {
+				// если нет ковычек то это l-value
+				sortedTokens = append(sortedTokens, StatisticElement{"lValue", "string", tokenValue})
+			}
+		} else {
+			// предпологаем что все оставшиеся токены- ключевые слова
+			// определяем что должно быть слева\справа от ключевого слова
+			if _, isThere := Find(comparisonAndLogicalOperationsWhichCanBeInWhereClauseRightValueLeftColumnName, tokenValue); isThere {
+				// значит токен относится к типу слева колонка справа значение
+				sortedTokens = append(sortedTokens, StatisticElement{"specWord", "LeftColumnRightValue", tokenValue})
+			} else if _, isThere := Find(comparisonAndLogicalOperationsWhichCanBeInWhereClauseRightColumnNameLeftValue, tokenValue); isThere {
+				// значит токен относится к типу слева значение справа колонка
+				sortedTokens = append(sortedTokens, StatisticElement{"specWord", "LeftValueRightColumn", tokenValue})
+			} else {
+				panic(thereIsAnKeywordsFromAnotherQueryPart.Error())
+			}
+		}
+	}
+	return nil, sortedTokens
+}
+
+// функция проверят синтаксис нашей where части sql запроса
+func syntaxCheck(tokens []StatisticElement) {
+	//первое слово не должно быть ни ключевым ни rValue
+	if len(tokens) != 0 && tokens[0].tokenType != "lValue" {
+		panic(incorrectQueryError.Error() + "error is near " + tokens[0].value + " word")
 	}
 
-	if _, isThere := Find(comparisonAndLogicalOperationsWhichCanBeInWhereClause, v.sqlParts[len(v.sqlParts)-1]); isThere {
-		panic(incorrectStartOfQuery.Error())
-	}
+	for index, value := range tokens {
+		//fmt.Printf("%v - index, %s - value \n", index, value) -> покжет что хранится
 
-	if v.sqlParts[0][0] == '\'' || v.sqlParts[0][len(v.sqlParts[0])-1] == '\'' {
-		panic("Первое слово  не может быть строкой")
-	}
-
-	for index, value := range v.sqlParts {
 		if index != 0 {
-			// проверка на то , что если элемент является одним из ключевых слов, то не перед ним ни до не должно быть ключевых слов
-			if _, isThere := Find(comparisonAndLogicalOperationsWhichCanBeInWhereClause, value); isThere {
-				_, isThereBefore := Find(comparisonAndLogicalOperationsWhichCanBeInWhereClause, v.sqlParts[index-1])
-				_, isThereAfter := Find(comparisonAndLogicalOperationsWhichCanBeInWhereClause, v.sqlParts[index+1])
-
-				if isThereBefore || isThereAfter {
-					panic(syntaxError.Error() + "near " + value + " word of query")
+			// проверяем что слева от типа LeftColumnRightValue должно стоять lValue
+			if value.dataType == "LeftColumnRightValue" {
+				if value.value == "BETWEEN" {
+					println(tokens[index-1].tokenType, " should be AND")
+					if len(tokens) == index-2 || tokens[index+2].value != "AND" || tokens[index-1].tokenType != "lValue" {
+						panic(incorrectQueryError.Error() + "error with BETWEEN keyword")
+					}
+				} else if tokens[index-1].tokenType != "lValue" {
+					panic(incorrectQueryError.Error() + "error is near " + value.value + " word")
+				} else if len(tokens) == index-1 || tokens[index+1].tokenType != "rValue" {
+					panic(incorrectQueryError.Error() + "error is near " + value.value + " word")
+				}
+				// проверяем что слева от типа LeftValueRightColumn стоит rValue
+			} else if value.dataType == "LeftValueRightColumn" {
+				if tokens[index-2].value == "BETWEEN" {
+					if value.value != "AND" {
+						panic(incorrectQueryError.Error() + "error with BETWEEN keyword")
+					}
+				} else if tokens[index-1].tokenType != "rValue" {
+					panic(incorrectQueryError.Error() + " error is near " + value.value + " word")
+				} else if len(tokens) == index+1 || tokens[index+1].tokenType != "lValue" {
+					panic(incorrectQueryError.Error() + " error is near " + value.value + " word")
+				}
+			} else if value.dataType == "string" || value.dataType == "int" {
+				// предусмотреть ситуацию когда 2 int или стринг подряд стоят
+				if tokens[index-1].dataType == "string" || tokens[index-1].dataType == "int" {
+					panic(incorrectQueryError.Error() + " error is near " + value.value + " word")
 				}
 			}
-
-			if value[0] == '\'' || value[len(value)-1] == '\'' {
-				// если это какая то строка, то до неё должно быть ключевое слово
-				if _, isThere := Find(comparisonAndLogicalOperationsWhichCanBeInWhereClauseEasyStruct, v.sqlParts[index-1]); !isThere {
-					panic(syntaxError.Error() + "near : " + value + " word of query")
-				}
-				// строка должна и начинаться и заканчиваться со специального символа, иначе синтаксическая ошибка
-				if value[0] != '\'' || value[len(value)-1] != '\'' {
-					panic(syntaxError.Error() + "near : " + value + " word of query, may be you forgot add the quotes to the string value")
-				}
-			}
-			//  если это какое точисло, то до него должно быть ключевое слов
-			if _, err := strconv.Atoi(value); err == nil {
-
-				if _, isThere := Find(comparisonAndLogicalOperationsWhichCanBeInWhereClause, v.sqlParts[index-1]); !isThere {
-					panic(syntaxError.Error() + "near - " + value + " word of query")
-				}
-			}
-			// перед не специальным словом не может быть не специальное слово
-			_, isCurrentSpecSymbol := Find(comparisonAndLogicalOperationsWhichCanBeInWhereClause, value)
-			if _, isPreviousSpecSymbol := Find(comparisonAndLogicalOperationsWhichCanBeInWhereClause, v.sqlParts[index-1]); !isPreviousSpecSymbol &&
-				!isCurrentSpecSymbol {
-				panic(syntaxError.Error() + "near - " + value + " word of query")
-			}
-
 		}
 	}
 }
 
+// функция проверяет типы колонок к типам из columnInfo переменной
+func checkColumnTypes(tokens []StatisticElement, columnsInfo map[string]string, whereMap map[string]string) {
+	//создаем локальный map в верхнем регистре что бы было регистро независимо ( элементы в tokens уже все в верхнем регистре )
+	localMapUpperCase := make(map[string]string)
+	for key, value := range columnsInfo {
+		localMapUpperCase[strings.ToUpper(key)] = value
+	}
+	for index, value := range tokens {
+		// проверяем на то, что такой токен присутствует в нашем массиве
+		val, ok := localMapUpperCase[value.value]
+		if value.tokenType == "lValue" && ok {
+			//сопоставляем в Where
+			if tokens[index+2].dataType == val {
+				whereMap[value.value] = tokens[index+2].value
+			}
+			if tokens[index+2].dataType != val {
+				panic("type error for column: " + value.value + ", excepted: " + val + " received " + tokens[index+2].dataType)
+			}
+		}
+	}
+}
+
+// функция занимается сбором данных и синтаксической проверкой where части sql запроса
+func (v *Parse) CheckCorrectSpelling() {
+	err, sortedTokens := splitTokensOnTypes(v.tokensListWithInfo)
+	if err != nil {
+		panic(err.Error())
+	}
+	syntaxCheck(sortedTokens)
+	checkColumnTypes(sortedTokens, v.columnInfo, v.Where)
+	v.tokensListWithInfo = sortedTokens
+}
+
 func main() {
-	firstParse := Parse{"name <> 'ilia' and age != 15", []string{}}
+	// указываем то, что в определенные колонки должен быть определенный тип данных (int\string) названия колонок могут быть в любом регистре
+	columnsInfo := map[string]string{
+		"AlICE.name":   "int",
+		"BOB.LASTNAME": "string",
+		"age":          "int",
+	}
+	// все поля из запроса нужно занести в columnsInfo, иначе они не проверятся на типы и не занесутся в firstParse.Where
+	firstParse := Parse{
+		"Alice.Name = 5 and Bob.LastName != '56' or age = 20",
+		[]StatisticElement{},
+		columnsInfo,
+		map[string]string{},
+	}
 	err := firstParse.ParseQueryOnTokens()
 	if err != nil {
 		panic(err.Error())
 	}
 	firstParse.CheckCorrectSpelling()
+	println("Выражение прошло валидацию")
 
-	print("Выражение прошло валидацию")
+	// этим мы проверяем что у нас есть "такого воида  токены" ключ - имя колонки , значение - значение которое мы присваиваем
+	for key, val := range firstParse.Where {
+		println(key, val)
+	}
+
+	// соответственно если нам требуется аналитика по каждому токену, мы можем получить её с помощью простого перебора firstParse.tokensListWithInfo
+	// аналитика ( в данном случае firstParse.tokensListWithInfo ) включает в себя массив токенов у каждого из которых
+	//я выделил 3 основные черты {tokenType - lValue\rValue\specWord,
+	//dataType - тип данных, на данный момент есть 2: string\int - для полей где  tokenType = rValue и string для полей где tokenType = lValue,
+	//value - значение токена в upperCase }
+
 }
