@@ -178,6 +178,7 @@ func main() {
 		"AlICE.name":   "int",
 		"BOB.LASTNAME": "string",
 		"age":          "int",
+		"age2":         "string",
 	}
 	// все поля из запроса нужно занести в columnsInfo, иначе они не проверятся на типы и не занесутся в firstParse.Where
 	firstParse := Parse{
