@@ -15,7 +15,7 @@ var (
 	syntaxErrorQuotes                                                             = errors.New("maybe you forgot add \" ' \" to start or end of your word")
 )
 
-// IN, LIKE keywords don`t support now
+// IN keywords don`t support now
 
 type Parse struct {
 	sqlWhereQuery      string
@@ -104,8 +104,12 @@ func syntaxCheck(tokens []StatisticElement) {
 		if index != 0 {
 			// проверяем что слева от типа LeftColumnRightValue должно стоять lValue
 			if value.dataType == "LeftColumnRightValue" {
+				if value.value == "LIKE" {
+					if len(tokens) == index-1 || tokens[index+1].dataType != "string" {
+						panic(incorrectQueryError.Error() + "error with LIKE keyword")
+					}
+				}
 				if value.value == "BETWEEN" {
-					println(tokens[index-1].tokenType, " should be AND")
 					if len(tokens) == index-2 || tokens[index+2].value != "AND" || tokens[index-1].tokenType != "lValue" {
 						panic(incorrectQueryError.Error() + "error with BETWEEN keyword")
 					}
@@ -177,7 +181,7 @@ func main() {
 	}
 	// все поля из запроса нужно занести в columnsInfo, иначе они не проверятся на типы и не занесутся в firstParse.Where
 	firstParse := Parse{
-		"Alice.Name = 5 and Bob.LastName != '56' or age = 20",
+		"Alice.Name = 5 and Bob.LastName != '56' or age = 20 and  age2 like '3'",
 		[]StatisticElement{},
 		columnsInfo,
 		map[string]string{},
