@@ -243,7 +243,7 @@ func main() {
 		"age2":         "string",
 	}
 	query := "Alice.Name=5 and Bob.LastName!='56' or  age<> 20 and  age2 like '%3' "
-	// все поля из запроса нужно занести в columnsInfo, иначе они не проверятся на типы и не занесутся в firstParse.Where
+	// все имена колонок из запроса нужно занести в columnsInfo, иначе они не проверятся на типы и не занесутся в firstParse.Where
 	firstParse := Parse{
 		query,
 		[]StatisticElement{},
