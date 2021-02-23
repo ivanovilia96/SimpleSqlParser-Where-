@@ -9,13 +9,13 @@ import (
 var (
 	incorrectQueryError                                                           = errors.New("your query is incorrect")
 	thereIsAnKeywordsFromAnotherQueryPart                                         = errors.New("your query has an keyword like LIMIT or ORDER BY, which can not be in this part of query, or IN statement which dont support now")
-	comparisonAndLogicalOperationsWhichCanBeInWhereClauseRightValueLeftColumnName = []string{"=", ">", "<", ">=", "<=", "<>", "!=", "BETWEEN", "LIKE"}
+	comparisonAndLogicalOperationsWhichCanBeInWhereClauseRightValueLeftColumnName = []string{"=", ">", "<", ">=", "<=", "<>", "!=", "BETWEEN", "LIKE", "IN"}
 	comparisonAndLogicalOperationsWhichCanBeInWhereClauseRightColumnNameLeftValue = []string{"AND", "OR"}
 	comparisonAndLogicalOperationsWhichCanBeInWhereClause                         = []string{"=", ">", "<", ">=", "<=", "<>", "!=", "AND", "OR", "IN", "BETWEEN", "LIKE"}
 	syntaxErrorQuotes                                                             = errors.New("maybe you forgot add \" ' \" to start or end of your word")
 )
 
-// IN keywords don`t support now
+// IN keyword don`t support now
 
 type Parse struct {
 	sqlWhereQuery      string
@@ -39,7 +39,69 @@ func (v *Parse) ParseQueryOnTokens() error {
 		if value == "LIMIT" || value == "ORDER" || value == ",LIMIT" || value == ",ORDER" || value == "LIMIT," || value == "ORDER," {
 			return thereIsAnKeywordsFromAnotherQueryPart
 		} else if len(value) != 0 {
-			v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value})
+			thereIsThisToken := false
+			// хотим проверить, нет ли в строке знаков сравнения (кроме <>)
+			if indexOfFoundElement, isThere := Find(strings.Split(value, ""), "="); isThere {
+
+				if indexOfFoundElement >= 1 {
+					if value[indexOfFoundElement-1] == '=' || value[indexOfFoundElement-1] == '>' || value[indexOfFoundElement-1] == '<' || value[indexOfFoundElement-1] == '!' {
+						if len(value[:indexOfFoundElement-1]) > 0 {
+							v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[:indexOfFoundElement-1]})
+						}
+						v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[indexOfFoundElement-1 : indexOfFoundElement+1]})
+						if len(value[indexOfFoundElement+1:]) > 0 {
+							v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[indexOfFoundElement+1:]})
+						}
+						thereIsThisToken = true
+					} else {
+						v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[:indexOfFoundElement]})
+						v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[indexOfFoundElement : indexOfFoundElement+1]})
+						if len(value[indexOfFoundElement+1:]) > 0 {
+							v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[indexOfFoundElement+1:]})
+						}
+						thereIsThisToken = true
+					}
+				} else {
+					v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[:1]})
+					if len(value[1:]) != 0 {
+						v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[1:]})
+					}
+					thereIsThisToken = true
+				}
+
+			}
+			// хотим проверить, нет ли в строке знака сравнения  <> и ни является ли он >
+			if indexOfFoundElement, isThere := Find(strings.Split(value, ""), ">"); isThere {
+				if indexOfFoundElement >= 1 {
+					if value[indexOfFoundElement-1] == '<' {
+						if len(value[:indexOfFoundElement-1]) > 0 {
+							v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[:indexOfFoundElement-1]})
+						}
+						v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[indexOfFoundElement-1 : indexOfFoundElement+1]})
+						if len(value[indexOfFoundElement+1:]) > 0 {
+							v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[indexOfFoundElement+1:]})
+						}
+						thereIsThisToken = true
+					} else {
+						v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[:indexOfFoundElement]})
+						v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[indexOfFoundElement : indexOfFoundElement+1]})
+						if len(value[indexOfFoundElement+1:]) > 0 {
+							v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[indexOfFoundElement+1:]})
+						}
+						thereIsThisToken = true
+					}
+				} else {
+					v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[:1]})
+					if len(value[1:]) != 0 {
+						v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value[1:]})
+					}
+					thereIsThisToken = true
+				}
+			}
+			if !thereIsThisToken {
+				v.tokensListWithInfo = append(v.tokensListWithInfo, StatisticElement{value: value})
+			}
+
 		}
 	}
 
@@ -95,7 +157,7 @@ func splitTokensOnTypes(tokens []StatisticElement) (error, []StatisticElement) {
 func syntaxCheck(tokens []StatisticElement) {
 	//первое слово не должно быть ни ключевым ни rValue
 	if len(tokens) != 0 && tokens[0].tokenType != "lValue" {
-		panic(incorrectQueryError.Error() + "error is near " + tokens[0].value + " word")
+		panic(incorrectQueryError.Error() + " error is near " + tokens[0].value + " word")
 	}
 
 	for index, value := range tokens {
@@ -106,17 +168,17 @@ func syntaxCheck(tokens []StatisticElement) {
 			if value.dataType == "LeftColumnRightValue" {
 				if value.value == "LIKE" {
 					if len(tokens) == index-1 || tokens[index+1].dataType != "string" {
-						panic(incorrectQueryError.Error() + "error with LIKE keyword")
+						panic(incorrectQueryError.Error() + " error with LIKE keyword")
 					}
 				}
 				if value.value == "BETWEEN" {
 					if len(tokens) == index-2 || tokens[index+2].value != "AND" || tokens[index-1].tokenType != "lValue" {
-						panic(incorrectQueryError.Error() + "error with BETWEEN keyword")
+						panic(incorrectQueryError.Error() + " error with BETWEEN keyword")
 					}
 				} else if tokens[index-1].tokenType != "lValue" {
-					panic(incorrectQueryError.Error() + "error is near " + value.value + " word")
+					panic(incorrectQueryError.Error() + " error is near " + value.value + " word")
 				} else if len(tokens) == index-1 || tokens[index+1].tokenType != "rValue" {
-					panic(incorrectQueryError.Error() + "error is near " + value.value + " word")
+					panic(incorrectQueryError.Error() + " error is near " + value.value + " word")
 				}
 				// проверяем что слева от типа LeftValueRightColumn стоит rValue
 			} else if value.dataType == "LeftValueRightColumn" {
@@ -180,13 +242,15 @@ func main() {
 		"age":          "int",
 		"age2":         "string",
 	}
+	query := "Alice.Name=5 and Bob.LastName!='56' or  age<> 20 and  age2 like '%3' "
 	// все поля из запроса нужно занести в columnsInfo, иначе они не проверятся на типы и не занесутся в firstParse.Where
 	firstParse := Parse{
-		"Alice.Name = 5 and Bob.LastName != '56' or age = 20 and  age2 like '3'",
+		query,
 		[]StatisticElement{},
 		columnsInfo,
 		map[string]string{},
 	}
+	println("Часть для проверки и парсинга: " + query)
 	err := firstParse.ParseQueryOnTokens()
 	if err != nil {
 		panic(err.Error())
